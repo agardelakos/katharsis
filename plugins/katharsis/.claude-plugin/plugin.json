@@ -1,5 +1,4 @@
 {
   "name": "katharsis",
-  "description": "Sanitize and optimize prompts for Opus using Haiku. Adds the /sanitize skill.",
-  "version": "0.2.0"
+  "description": "Sanitize and optimize prompts for Opus using Haiku. Adds the /sanitize skill."
 }
