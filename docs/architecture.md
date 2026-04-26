@@ -9,7 +9,7 @@ katharsis/
 ├── plugins/
 │   └── katharsis/
 │       ├── .claude-plugin/
-│       │   └── plugin.json       ← Plugin manifest (version, name)
+│       │   └── plugin.json       ← Plugin manifest (name, description)
 │       ├── agents/
 │       │   └── prompt-sanitizer.md  ← Haiku-pinned subagent (the engine)
 │       └── skills/
@@ -24,81 +24,111 @@ katharsis/
 
 ---
 
-## How the Two Files Relate
+## How the Components Relate
 
-**The skill** (`SKILL.md`) is the interface. It defines:
-- The `/sanitize` slash command
-- How to parse `$ARGUMENTS` (prompt + optional context files after `--`)
-- The post-sanitization UX (show output, ask user what to do next)
+**The skill** (`SKILL.md`) is the orchestrator. It runs in the main session and is responsible for:
+1. Extracting relevant context from the conversation history (automatic)
+2. Reading any files pinned via `--` (explicit)
+3. Invoking the subagent with both
 
-**The subagent** (`prompt-sanitizer.md`) is the engine. It defines:
-- `model: haiku` — pins Claude Haiku regardless of what model the main session uses
-- `tools: Read, Glob, Grep` — lets it read context files you reference
-- The rewriting rules Haiku follows
+**The subagent** (`prompt-sanitizer.md`) is the rewriter. It:
+- Runs on Haiku (`model: haiku`) regardless of what model the main session uses
+- Receives a structured input: raw prompt + session context + pinned files
+- Applies rewriting rules and returns a single clean prompt
 
-The skill delegates to the subagent via `agent: prompt-sanitizer` in its frontmatter. Claude Code handles the handoff.
+The skill handles the "what is relevant?" question. The subagent handles the "how should this be structured?" question. Neither tries to do both.
 
 ---
 
-## Why a Subagent and Not Just a Skill?
+## Context Pipeline
 
-A plain skill runs in the main session context — same model, same conversation history, output goes directly into the thread. That works for many things, but for our use case we need model pinning.
+Every `/sanitize` invocation runs two context layers before Haiku rewrites anything.
 
-The subagent runs in an isolated context with a pinned model (`haiku`). It receives the task, does its work, returns a result to the main session. The main session (Opus or Sonnet) then presents the result to you.
+### Layer 1 — Automatic session context
 
-This is also why the subagent instructions say "return ONLY the rewritten prompt" — we don't want its reasoning cluttering the main session context that Opus will later read.
+The main session model scans the conversation history and extracts what is clearly relevant to the user's prompt. It targets under 150 tokens — a conservative distillation, not a full summary.
+
+What it extracts:
+- The core problem being worked on
+- Approaches tried and why they failed
+- Constraints or requirements that emerged during the session
+- Specific files, functions, or error messages directly related to the prompt
+
+**Extraction quality depends on prompt specificity.** A precise prompt ("fix the JWT refresh race condition") anchors the extraction clearly. A vague prompt ("fix the auth thing") gives weaker signal — the extractor may miss relevant context or pull in loosely related threads. The extractor is tuned to under-extract (leave things out) rather than over-extract (include noise), because false positives cost Opus tokens and can misdirect it.
+
+This layer is most valuable in long sessions (20+ turns) with multiple failed attempts — exactly the case where you'd otherwise manually reconstruct context before sending to Opus.
+
+### Layer 2 — Pinned file context (--)
+
+Files referenced after `--` bypass relevance filtering and are always included. Use this when you know exactly what needs to be in the prompt.
+
+```
+/sanitize fix the race condition -- src/auth.dart logs/trace.log
+```
+
+Both layers combine: session context fills in what's already in the conversation; pinned files add what you're explicitly certain about.
 
 ---
 
 ## Token Flow
 
 ```
-Your prompt (~50-300 tokens)
-    ↓
-Skill parses arguments — negligible
-    ↓
-Subagent (Haiku) receives:
-  - Subagent system prompt (~200 tokens)
-  - Your raw prompt (~50-300 tokens)
-  - Context files if referenced (variable, but Haiku reads them cheaply)
-    ↓
-Haiku output: optimized prompt (~200-500 tokens)
-Cost: ~$0.001–0.003
-    ↓
-Main session presents result to you
-    ↓
-You send optimized prompt to Opus
-  - Cleaner input = fewer output tokens from Opus
-  - Less back-and-forth = fewer total turns
-Net saving: typically $0.005–0.02 per sanitized prompt on complex tasks
+/sanitize fix the JWT race condition -- logs/auth.log
+
+Main model (already loaded, ~free):
+  ├── scans conversation history
+  ├── produces session context block (~150 tokens)    ← ~$0.000002 (Sonnet output)
+  └── reads logs/auth.log (pinned)
+
+Haiku subagent receives:
+  ├── raw prompt (~20 tokens)
+  ├── session context (~150 tokens)
+  └── distilled log content (variable)
+  → rewrites → clean structured prompt (~300 tokens)
+Cost: ~$0.001–0.003 total
+
+User sends clean prompt to Opus:
+  ├── no need to re-read conversation history
+  ├── no clarifying questions about failed approaches
+  └── executes on first attempt
+Saving: typically $0.02–0.05 per avoided Opus clarification cycle
 ```
+
+The 150-token context extraction overhead from the main model costs ~$0.000002. Avoiding a single Opus clarification turn (~1000 tokens in+out) saves ~$0.02. Break-even is essentially immediate.
 
 ---
 
-## V2 — Automatic Hook (Future)
+## Why a Subagent for the Rewriting Step?
 
-The v2 design would add a `UserPromptSubmit` hook that intercepts every prompt and runs a lightweight classifier (also on Haiku) to decide: sanitize or pass through?
+The main model could rewrite the prompt itself, but using a subagent pinned to Haiku keeps the rewriting step cheap regardless of what model the main session runs. If the user is on Opus, having Opus rewrite their prompt would cost ~20x more than Haiku for the same output quality on a mechanical restructuring task.
+
+The split also keeps responsibilities clean: the main model does the context-aware extraction (it has the full conversation), and Haiku does the format-aware restructuring (it has a clear task and bounded input).
+
+---
+
+## V3 — Automatic Hook (Future)
+
+The v3 design would add a `UserPromptSubmit` hook that intercepts every prompt before it reaches the main model and runs a lightweight classifier (also on Haiku) to decide: sanitize or pass through?
 
 ```
-Every prompt → Hook → Haiku classifier (~100 tokens)
-    ├── "clear enough" → proceed immediately (100 token overhead, that's all)
-    └── "needs sanitizing" → invoke sanitizer → show result → user confirms → Opus
+Every prompt → Hook → Haiku classifier (~100 tokens, ~$0.0001)
+    ├── "clear enough" → proceed immediately
+    └── "needs sanitizing" → invoke sanitizer → user confirms → Opus
 ```
 
-The classifier prompt would be something like:
-> "Is this prompt structured clearly enough for Opus to execute on the first attempt, or would it benefit from restructuring? Answer: CLEAR or SANITIZE."
+The classifier prompt: "Is this prompt structured clearly enough for Opus to execute on the first attempt? Answer: CLEAR or SANITIZE."
 
-Key design constraint: the classifier must cost less than the expected saving from sanitizing. At Haiku prices, 100 tokens is ~$0.0001. That's the break-even floor.
+Key constraint: the classifier must cost less than the expected saving from sanitizing. At Haiku prices, 100 tokens is ~$0.0001 — that's the break-even floor, easily cleared on any complex prompt.
 
-Reference: [severity1/claude-code-prompt-improver](https://github.com/severity1/claude-code-prompt-improver) uses the same hook pattern for vague prompt detection — study that before building v2.
+Reference: [severity1/claude-code-prompt-improver](https://github.com/severity1/claude-code-prompt-improver) uses the same hook pattern for vague prompt detection.
 
 ---
 
 ## Contributing
 
-The most valuable contributions right now:
+The most valuable contributions:
 
-1. **Better rewriting rules** in `prompt-sanitizer.md` — what patterns consistently produce better Opus responses?
-2. **More examples** in `examples/transformations.md` — real before/after from actual sessions
-3. **Domain-specific variants** — e.g. a sanitizer tuned for IoT/embedded prompts, or Flutter/Dart prompts
-4. **V2 hook implementation** — if you build it, open a PR with benchmark data showing the classifier accuracy
+1. **Better extraction heuristics** in `SKILL.md` — what instructions produce more accurate session context extraction, especially for vague prompts?
+2. **Better rewriting rules** in `prompt-sanitizer.md` — what patterns consistently produce better Opus responses?
+3. **More examples** in `examples/transformations.md` — real before/after from actual sessions, including cases where extraction was imperfect
+4. **V3 hook implementation** — if you build it, open a PR with classifier accuracy benchmarks

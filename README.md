@@ -99,55 +99,81 @@ cp plugins/katharsis/skills/sanitize/SKILL.md .claude/skills/sanitize/
 
 ---
 
+## How context works
+
+Every `/sanitize` invocation runs a two-layer context pipeline before Haiku touches your prompt.
+
+**Layer 1 — Automatic session context**
+
+The main model scans the conversation history and extracts what is clearly relevant to your prompt: the core problem, approaches that failed and why, constraints that emerged, specific files or functions mentioned. It distills this into a short block (~150 tokens) that gets passed to Haiku automatically — no `--` required.
+
+This is the primary value-add for long sessions. After 30 turns and three failed attempts, Haiku knows what not to suggest. Opus never has to re-read the history or ask clarifying questions it could have answered from context.
+
+**Extraction quality depends on prompt specificity.** A precise prompt ("fix the JWT refresh race condition on concurrent requests") gives the main model a clear anchor and produces accurate extraction. A vague prompt ("fix the auth thing") gives weaker signal — extraction may be incomplete or pull in loosely related threads. When in doubt, the extractor is tuned to under-extract rather than include noise.
+
+**Layer 2 — Pinned file context (--)**
+
+Files you reference after `--` bypass the relevance filter entirely and are always included. Use this when you know exactly what needs to be in the prompt and don't want to rely on automatic extraction.
+
+```
+/sanitize fix the packet drop issue -- logs/ble_debug.log
+/sanitize fix the race condition -- src/auth.dart logs/trace.log
+```
+
+Both layers combine: automatic extraction covers the session history, `--` pins the files you're certain about.
+
 ## Usage
 
-### Basic — just restructure your prompt
+### Basic — session context is extracted automatically
 
 ```
 /sanitize explain why my BLE GATT notification handler drops packets under high throughput
 ```
 
-### With context files — Haiku reads and distills them for you
+If you've been debugging this for 20 turns, Haiku already knows what you tried. No extra flags needed.
+
+### Pin specific files with --
 
 ```
 /sanitize fix the packet drop issue -- logs/ble_debug.log
 ```
 
 ```
-/sanitize fix the crash after 3 failed attempts -- logs/error.log logs/trace.log
+/sanitize fix the crash -- logs/error.log logs/trace.log
 ```
 
-### With previous failed attempt context
+### Both together — auto context + pinned files
 
 ```
-/sanitize fix the queue implementation, previous attempt added a coroutine but it deadlocked -- src/ble_handler.dart logs/deadlock_trace.log
+/sanitize fix the queue implementation -- src/ble_handler.dart logs/deadlock_trace.log
 ```
+
+Session history is extracted automatically; the files are pinned on top.
 
 ---
 
-## What Haiku Does to Your Prompt
+## What the output looks like
 
-**Before:**
+**Your prompt (after a long debugging session):**
 ```
-fix the bug in the BLE thing, it keeps dropping, i tried adding a queue but it broke,
-check the logs maybe, also dont break the other stuff
+fix the queue thing again
 ```
 
-**After:**
+**What Haiku produces (with automatic session context):**
 ```
 Goal: Fix packet drops in BLE GATT notification handler without breaking existing connection setup.
 
-Context (from logs/ble_debug.log):
-- Drop occurs at handleNotification() line 247 under >10 concurrent notifications
-- Previous fix: added CoroutineQueue at line 251 — caused deadlock when device disconnects mid-transfer (log line 891)
-- Root cause: handler blocks main thread; queue didn't account for disconnect race condition
+Session context:
+- Previous fix: added CoroutineQueue at line 251 — caused deadlock when device disconnects mid-transfer
+- Root cause identified: handler blocks main thread; queue didn't account for disconnect race condition
+- Constraint from earlier: do not modify connectToDevice() or GATT service discovery
 
 Steps:
 1. Revise handleNotification() to use a non-blocking dispatch pattern that handles mid-transfer disconnects
-2. Do NOT modify connectToDevice() or the GATT service discovery logic
-3. Add a unit test for the disconnect-during-transfer edge case
+2. Explicitly handle the disconnect-during-transfer race condition
+3. Add a unit test for the disconnect edge case
 
-Output: revised handleNotification() implementation + test, with inline comments explaining the threading approach.
+Output: revised handleNotification() implementation + test, with inline comments on threading approach.
 ```
 
 ---
@@ -169,8 +195,9 @@ Check the [Claude Code changelog](https://code.claude.com/docs/en/changelog) to 
 
 ## Roadmap
 
-- **v1.0** — Manual invocation via `/sanitize` (current)
-- **v2.0** — Optional `UserPromptSubmit` hook that auto-evaluates every prompt and sanitizes only when beneficial (no-op for clear prompts)
+- **v1** — Manual invocation via `/sanitize`, explicit `--` file context
+- **v2** — Automatic session context extraction from conversation history (current)
+- **v3** — Optional `UserPromptSubmit` hook that auto-evaluates every prompt and sanitizes only when beneficial (no-op for clear prompts)
 
 ---
 
