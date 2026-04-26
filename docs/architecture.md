@@ -4,12 +4,17 @@
 
 ```
 katharsis/
-├── .claude/
-│   ├── agents/
-│   │   └── prompt-sanitizer.md   ← Haiku-pinned subagent (the engine)
-│   └── skills/
-│       └── sanitize/
-│           └── SKILL.md          ← What you invoke with /sanitize
+├── .claude-plugin/
+│   └── marketplace.json          ← Plugin marketplace catalog
+├── plugins/
+│   └── katharsis/
+│       ├── .claude-plugin/
+│       │   └── plugin.json       ← Plugin manifest (version, name)
+│       ├── agents/
+│       │   └── prompt-sanitizer.md  ← Haiku-pinned subagent (the engine)
+│       └── skills/
+│           └── sanitize/
+│               └── SKILL.md      ← What you invoke with /sanitize
 ├── examples/
 │   └── transformations.md        ← Before/after examples
 ├── docs/

@@ -62,7 +62,16 @@ The rule of thumb: if you would not think twice before sending the prompt, don't
 
 ## Installation
 
-### Option A — Global (available in all projects)
+### Option A — Plugin marketplace (recommended)
+
+```bash
+claude plugin marketplace add agardelakos/katharsis
+claude plugin install katharsis@katharsis-marketplace
+```
+
+Restart Claude Code and verify with `/plugin` — `katharsis` should appear in the installed list.
+
+### Option B — Global manual install (available in all projects)
 
 `~/.claude` is Claude Code's global config directory — located at `C:\Users\<you>\.claude` on Windows or `~/.claude` on macOS/Linux. The `agents/` and `skills/` subdirectories do not exist by default; the commands below create them.
 
@@ -73,19 +82,19 @@ cd katharsis
 
 # Copy subagent (the Haiku-pinned engine)
 mkdir -p ~/.claude/agents
-cp .claude/agents/prompt-sanitizer.md ~/.claude/agents/prompt-sanitizer.md
+cp plugins/katharsis/agents/prompt-sanitizer.md ~/.claude/agents/prompt-sanitizer.md
 
 # Copy skill (what you invoke)
 mkdir -p ~/.claude/skills/sanitize
-cp .claude/skills/sanitize/SKILL.md ~/.claude/skills/sanitize/SKILL.md
+cp plugins/katharsis/skills/sanitize/SKILL.md ~/.claude/skills/sanitize/SKILL.md
 ```
 
-### Option B — Project-level only
+### Option C — Project-level only
 
 ```bash
 mkdir -p .claude/agents .claude/skills/sanitize
-cp .claude/agents/prompt-sanitizer.md .claude/agents/
-cp .claude/skills/sanitize/SKILL.md .claude/skills/sanitize/
+cp plugins/katharsis/agents/prompt-sanitizer.md .claude/agents/
+cp plugins/katharsis/skills/sanitize/SKILL.md .claude/skills/sanitize/
 ```
 
 ---

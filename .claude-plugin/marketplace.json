@@ -1,0 +1,25 @@
+{
+  "name": "katharsis-marketplace",
+  "owner": {
+    "name": "agardelakos",
+    "email": "mitos.software.solutions@gmail.com"
+  },
+  "metadata": {
+    "description": "Prompt sanitization tools for Claude Code — use Haiku to prepare prompts before sending to Opus."
+  },
+  "plugins": [
+    {
+      "name": "katharsis",
+      "source": "./plugins/katharsis",
+      "description": "Sanitize and optimize prompts for Opus using Haiku. Adds the /sanitize skill.",
+      "author": {
+        "name": "agardelakos"
+      },
+      "homepage": "https://github.com/agardelakos/katharsis",
+      "repository": "https://github.com/agardelakos/katharsis",
+      "license": "MIT",
+      "keywords": ["prompt", "sanitize", "opus", "haiku", "optimization"],
+      "category": "productivity"
+    }
+  ]
+}
