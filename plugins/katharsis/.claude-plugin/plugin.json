@@ -1,4 +1,17 @@
 {
   "name": "katharsis",
-  "description": "Sanitize and optimize prompts for Opus using Haiku. Adds the /sanitize skill."
+  "description": "Sanitize and optimize prompts for Opus using Haiku. Adds the /sanitize skill and optional auto-sanitize mode.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "description": "Auto-sanitize classifier — no-op unless .claude/katharsis_active exists in the project",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/prompt-submit.py || python ${CLAUDE_PLUGIN_ROOT}/hooks/prompt-submit.py"
+          }
+        ]
+      }
+    ]
+  }
 }

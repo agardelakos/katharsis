@@ -106,21 +106,66 @@ The split also keeps responsibilities clean: the main model does the context-awa
 
 ---
 
-## V3 — Automatic Hook (Future)
+## V3 — Auto Mode Hook
 
-The v3 design would add a `UserPromptSubmit` hook that intercepts every prompt before it reaches the main model and runs a lightweight classifier (also on Haiku) to decide: sanitize or pass through?
+Auto mode is opt-in. Users enable it per-project with `/sanitize_on` and disable it with `/sanitize_off`. When active, a `UserPromptSubmit` hook fires on every prompt and injects classifier instructions into the main model's context.
+
+### Why a hook, and why opt-in
+
+A `UserPromptSubmit` hook is the only mechanism that can intercept prompts before the main model sees them. Running it unconditionally on every prompt would add overhead to sessions where the user never needs sanitization — hence the flag file toggle. The hook is registered at the plugin level (always present) but becomes a no-op unless the flag file exists.
+
+Slash commands are explicitly skipped. This means `/sanitize` still works as a one-off manual trigger regardless of whether auto mode is on or off.
+
+### How the classifier works
+
+The classifier is not a separate Haiku call. It is a set of instructions injected into the main model's context via `additionalContext`. The main model reads these instructions alongside the user's prompt and makes an inline decision:
 
 ```
-Every prompt → Hook → Haiku classifier (~100 tokens, ~$0.0001)
-    ├── "clear enough" → proceed immediately
-    └── "needs sanitizing" → invoke sanitizer → user confirms → Opus
+Prompt arrives → hook fires → flag file exists?
+    ├── No  → exit immediately, no output, no cost
+    └── Yes → inject ~170-token additionalContext block
+               ↓
+               Main model reads: user prompt + classifier instructions
+               ↓
+               Inline assessment (a few tokens, no API call)
+               ├── PASS THROUGH → respond directly, silently
+               └── SANITIZE → extract context → Haiku rewrites → user confirms
 ```
 
-The classifier prompt: "Is this prompt structured clearly enough for Opus to execute on the first attempt? Answer: CLEAR or SANITIZE."
+This design was chosen deliberately over a separate Haiku classifier call. A separate call would cost ~$0.0001 and add latency on every prompt. The inline approach costs ~$0.000003 (170 injected tokens at Sonnet input pricing) and adds no latency because the main model is already reading the prompt anyway.
 
-Key constraint: the classifier must cost less than the expected saving from sanitizing. At Haiku prices, 100 tokens is ~$0.0001 — that's the break-even floor, easily cleared on any complex prompt.
+### Cost model for auto mode
 
-Reference: [severity1/claude-code-prompt-improver](https://github.com/severity1/claude-code-prompt-improver) uses the same hook pattern for vague prompt detection.
+| Event | Cost |
+|---|---|
+| Hook runs, flag absent | $0.00 |
+| Hook runs, flag present, prompt passes through | ~$0.000003 |
+| Hook runs, flag present, prompt gets sanitized | ~$0.001–0.003 |
+
+The hook never calls the Anthropic API and requires no packages beyond the Python standard library. If Python is unavailable, it fails silently — auto mode degrades to a no-op, manual `/sanitize` is unaffected.
+
+### Design trade-offs and honest limitations
+
+**The real cost of auto mode is UX, not money.** Every complex prompt now pauses for a confirm step the user did not explicitly trigger. In a mixed session (short follow-ups interleaved with complex tasks), this can feel like interruption even though it is working as intended.
+
+**The classifier accuracy depends on the main model's judgment.** It will occasionally assess a prompt as SANITIZE when the user considers it clear, or vice versa. There is no ground truth. The instructions are tuned to err toward SANITIZE in ambiguous cases (the cost of a false negative — skipping useful sanitization — is higher than the cost of a false positive — an unnecessary Haiku call).
+
+**The hook cannot detect which model the user is targeting.** It fires on every non-slash-command prompt regardless of whether the user intends to work with Opus, Sonnet, or Haiku. Users targeting cheaper models during auto mode pay minor unnecessary overhead. This is a known limitation documented in the README.
+
+### File layout for auto mode
+
+```
+plugins/katharsis/
+├── hooks/
+│   └── prompt-submit.py          ← UserPromptSubmit hook script
+├── skills/
+│   ├── sanitize_on/
+│   │   └── SKILL.md              ← Creates .claude/katharsis_active
+│   └── sanitize_off/
+│       └── SKILL.md              ← Removes .claude/katharsis_active
+```
+
+The flag file (`.claude/katharsis_active`) lives in the user's project directory, not in the plugin. It should be added to `.gitignore` — it records local session preference, not project configuration.
 
 ---
 
@@ -130,5 +175,5 @@ The most valuable contributions:
 
 1. **Better extraction heuristics** in `SKILL.md` — what instructions produce more accurate session context extraction, especially for vague prompts?
 2. **Better rewriting rules** in `prompt-sanitizer.md` — what patterns consistently produce better Opus responses?
-3. **More examples** in `examples/transformations.md` — real before/after from actual sessions, including cases where extraction was imperfect
-4. **V3 hook implementation** — if you build it, open a PR with classifier accuracy benchmarks
+3. **Better classifier instructions** in `prompt-submit.py` — what `additionalContext` wording produces more accurate pass/sanitize decisions?
+4. **More examples** in `examples/transformations.md` — real before/after from actual sessions, including cases where auto mode assessed correctly and incorrectly

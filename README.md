@@ -12,6 +12,10 @@ The idea: Opus charges for every token it reads and writes. A poorly structured 
 
 ## How It Works
 
+Katharsis has two modes. Both do the same thing — they differ only in who decides when to run.
+
+**Manual mode** (default): you invoke `/sanitize` when you want it.
+
 ```
 You type:  /sanitize fix the BLE handler that drops packets -- logs/ble_debug.log
 
@@ -22,7 +26,27 @@ You get:   a clean, precise prompt with distilled context embedded
 You send:  that prompt to Opus → better result, fewer tokens, less back-and-forth
 ```
 
-You stay in control at every step. The sanitized prompt is shown to you before anything is sent to Opus. You can send it as-is, edit it, or discard it.
+**Auto mode** (opt-in): you run `/sanitize_on` at the start of a session. From that point, every prompt is assessed automatically — complex ones are sanitized, simple ones pass through without interruption.
+
+```
+You type:  /sanitize_on         ← once, at session start
+
+Later...
+
+You type:  fix the race condition    ← no /sanitize needed
+           ↓
+           main model assesses: complex task with session history → sanitize
+           ↓
+Haiku:     extracts context → restructures prompt
+           ↓
+You get:   sanitized prompt + "Send to Opus, edit, or discard?"
+
+You type:  run the tests        ← simple follow-up
+           ↓
+           main model assesses: clear, no benefit → passes through silently
+```
+
+You stay in control at every step. The sanitized prompt is always shown to you before anything is sent to Opus. You can send it as-is, edit it, or discard it.
 
 ---
 
@@ -122,6 +146,77 @@ Files you reference after `--` bypass the relevance filter entirely and are alwa
 
 Both layers combine: automatic extraction covers the session history, `--` pins the files you're certain about.
 
+---
+
+## Auto mode
+
+Auto mode is an opt-in feature for sessions where you want Katharsis to run without thinking about it. It is not the default and it is not for everyone. Read this section before enabling it.
+
+### What it does
+
+When auto mode is on, a hook fires on every prompt you send. The hook checks for a flag file in your project (`.claude/katharsis_active`). If the flag exists, it injects a short set of instructions into the main model's context. The main model then makes an inline assessment before responding:
+
+| Prompt type | Decision | Your experience |
+|---|---|---|
+| Short follow-up ("run the tests", "apply that") | Pass through | No interruption — Katharsis is invisible |
+| Simple question, clear instruction | Pass through | No interruption |
+| Complex new task, vague with rich session history | Sanitize | Haiku rewrites → you confirm → proceed |
+| Multi-step, references prior failures or constraints | Sanitize | Haiku rewrites → you confirm → proceed |
+
+The assessment is **inline** — the main model decides as part of reading your prompt. There is no separate Haiku classifier call, no additional API round-trip, no external dependency.
+
+### Honest cost breakdown
+
+| Scenario | Cost |
+|---|---|
+| Auto mode OFF (flag file absent) | **$0.00** — hook exits after one file check |
+| Auto mode ON, prompt passes through | **~$0.000003** — ~170 injected tokens at Sonnet input pricing |
+| Auto mode ON, prompt gets sanitized | **~$0.001–0.003** — same as invoking `/sanitize` manually |
+
+Auto mode does not cost more than manual on prompts that get sanitized. The extra cost is on prompts that pass through — roughly $0.000003 each, negligible in any realistic session.
+
+**The real trade-off is UX, not money.** Complex prompts will pause for a confirm step you did not explicitly trigger. If your session is mostly quick iterative work, that pause will feel like friction. If your session is mostly complex standalone tasks, it will feel natural.
+
+### When to enable it
+
+**Good fit:**
+- You are starting a dedicated session where you plan to send complex, multi-step prompts to Opus
+- You want to stop thinking about when to invoke `/sanitize` and let the system decide
+- Most of your prompts in this session will be new tasks, not short follow-ups
+
+**Not a good fit:**
+- Quick iterative work with lots of short follow-ups
+- Sessions where you are using Sonnet or Haiku as your main model
+- Any time the confirm step would feel like interruption rather than help
+- If you are already disciplined about invoking `/sanitize` manually
+
+### Enable and disable
+
+```
+/sanitize_on     enable auto mode for this project session
+/sanitize_off    disable it
+```
+
+The flag is stored in `.claude/katharsis_active` inside your project directory. It is **project-scoped** — it only affects the project where you run `/sanitize_on`. It persists across Claude Code sessions until you explicitly remove it with `/sanitize_off`.
+
+**This file should not be committed to git.** It records local session preference, not project configuration. Add it to your `.gitignore`:
+
+```
+.claude/katharsis_active
+```
+
+### What the hook does under the hood (transparency)
+
+The hook is a Python script (`hooks/prompt-submit.py`) that runs on every prompt. Here is its complete logic:
+
+1. Parse the JSON input from Claude Code
+2. If the prompt starts with `/` (any slash command): exit immediately, do nothing
+3. Check whether `.claude/katharsis_active` exists in the project directory
+4. If the file does not exist: exit immediately, do nothing
+5. If the file exists: output a JSON block with `additionalContext` — a ~170-token instruction block telling the main model to assess the prompt and run the sanitize pipeline if it would help
+
+The hook never blocks a prompt, never calls the Anthropic API, and never requires any package beyond the Python standard library. If Python is not found in your PATH, the hook fails silently and auto mode degrades to a no-op — your prompts are unaffected.
+
 ## Usage
 
 ### Basic — session context is extracted automatically
@@ -180,8 +275,14 @@ Output: revised handleNotification() implementation + test, with inline comments
 
 ## Requirements
 
+**For manual mode (`/sanitize`):**
 - Claude Code (recent version with `model:` frontmatter support in subagents)
 - A Claude subscription or API key with access to both Haiku and Opus
+
+**For auto mode (`/sanitize_on`) — additionally:**
+- Python 3 available in your PATH as `python3` or `python`
+- No external packages required — only the Python standard library is used
+- If Python is not found, the hook exits silently and auto mode becomes a no-op. Manual `/sanitize` is unaffected.
 
 ### Verify subagent model pinning works
 
@@ -196,8 +297,8 @@ Check the [Claude Code changelog](https://code.claude.com/docs/en/changelog) to 
 ## Roadmap
 
 - **v1** — Manual invocation via `/sanitize`, explicit `--` file context
-- **v2** — Automatic session context extraction from conversation history (current)
-- **v3** — Optional `UserPromptSubmit` hook that auto-evaluates every prompt and sanitizes only when beneficial (no-op for clear prompts)
+- **v2** — Automatic session context extraction from conversation history
+- **v3** — Optional auto mode via `UserPromptSubmit` hook (`/sanitize_on` / `/sanitize_off`) — current
 
 ---
 
@@ -205,7 +306,7 @@ Check the [Claude Code changelog](https://code.claude.com/docs/en/changelog) to 
 
 This is a niche tool built for a specific workflow: complex sessions with Opus where prompt quality has real cost and quality consequences. It is not trying to be useful to everyone.
 
-The hook pattern for v2 is inspired by [severity1/claude-code-prompt-improver](https://github.com/severity1/claude-code-prompt-improver) — worth studying if you want to understand progressive disclosure in Claude Code hooks.
+The hook pattern for v3 is inspired by [severity1/claude-code-prompt-improver](https://github.com/severity1/claude-code-prompt-improver) — worth studying if you want to understand progressive disclosure in Claude Code hooks.
 
 ---
 
