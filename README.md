@@ -6,7 +6,7 @@ Katharsis is a Claude Code skill + subagent that intercepts your messy, context-
 
 **This is a niche tool.** It is designed for complex, high-stakes prompts where you are deliberately reaching for Opus — the most capable and most expensive Claude model. It is not meant for everyday casual use. If you are chatting, asking quick questions, or working with Sonnet or Haiku already, this adds friction with no benefit.
 
-The idea: Opus charges for every token it reads and writes. A poorly structured prompt wastes both. Haiku costs ~20x less — use it to do the cleanup work so Opus doesn't have to.
+The idea: Opus charges for every token it reads and writes. A poorly structured prompt wastes both. Haiku costs ~5x less per token than Opus — use it to do the cleanup work so Opus doesn't have to.
 
 ---
 

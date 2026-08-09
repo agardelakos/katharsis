@@ -100,7 +100,7 @@ The 150-token context extraction overhead from the main model costs ~$0.000002. 
 
 ## Why a Subagent for the Rewriting Step?
 
-The main model could rewrite the prompt itself, but using a subagent pinned to Haiku keeps the rewriting step cheap regardless of what model the main session runs. If the user is on Opus, having Opus rewrite their prompt would cost ~20x more than Haiku for the same output quality on a mechanical restructuring task.
+The main model could rewrite the prompt itself, but using a subagent pinned to Haiku keeps the rewriting step cheap regardless of what model the main session runs. If the user is on Opus, having Opus rewrite their prompt would cost ~5x more than Haiku for the same output quality on a mechanical restructuring task.
 
 The split also keeps responsibilities clean: the main model does the context-aware extraction (it has the full conversation), and Haiku does the format-aware restructuring (it has a clear task and bounded input).
 
@@ -177,3 +177,18 @@ The most valuable contributions:
 2. **Better rewriting rules** in `prompt-sanitizer.md` — what patterns consistently produce better Opus responses?
 3. **Better classifier instructions** in `prompt-submit.py` — what `additionalContext` wording produces more accurate pass/sanitize decisions?
 4. **More examples** in `examples/transformations.md` — real before/after from actual sessions, including cases where auto mode assessed correctly and incorrectly
+
+---
+
+## Future Work
+
+### Adopt the Agent Plugins format?
+
+[Agent Plugins](https://vercel.com/blog/introducing-agent-plugins) (launched August 2026) is an open, vendor-neutral packaging format for AI agent extensions — a root-level `plugin.json`, Skills under `skills/`, and MCP servers via `mcp.json`, with client-specific namespace directories for anything else. Launch adopters: ChatGPT, Cursor, GitHub Copilot, Kiro, VS Code.
+
+**Not adopted as of 2026-08-09. Revisit if either changes:**
+
+- **Claude Code isn't a launch adopter.** Katharsis targets Claude Code specifically; restructuring to a format the actual runtime doesn't consume buys nothing today.
+- **The spec only standardizes Skills and MCP servers.** It has no defined place for a pinned subagent (`agents/prompt-sanitizer.md`, Katharsis's Haiku-pinning mechanism) or a `UserPromptSubmit` hook (`hooks/prompt-submit.py`, what drives auto mode). Both are load-bearing for this plugin's design — see "Why a Subagent for the Rewriting Step?" and "V3 — Auto Mode Hook" above — and neither maps onto the spec's two-component model.
+
+If Claude Code later adopts Agent Plugins, or if it becomes worth offering a Skills-only subset of `/sanitize` (no auto mode, no Haiku-pinning) portable to Cursor/VS Code/etc., this is worth revisiting then.
